@@ -36,7 +36,7 @@ kin = depl:getPeer("kin")
 --Connect the ports
 cp=rtt.Variable("ConnPolicy")
 depl:connect("kin.sensor_joint_angles","traj_gen.measured_angles",cp )
-depl:connect("kin.control_joint_positions","traj_gen.desired_positions",cp )
+depl:connect("kin.control_joint_torques","traj_gen.desired_positions",cp )
 
 --Call configureHook() functions of both components
 kin:configure()

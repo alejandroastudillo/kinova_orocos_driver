@@ -611,12 +611,12 @@ void kinova_gen3::velocity_low_level_servoing()
 void kinova_gen3::torque_low_level_servoing()
 {
   if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
-    if(control_joint_positions.connected()){
-      type_data = control_joint_positions.read(temporary_joint_setpoints);
+    if(control_joint_torques.connected()){
+      type_data = control_joint_torques.read(temporary_joint_setpoints);
 
       if ( type_data != NoData ){
         if (temporary_joint_setpoints.size()!=7){
-          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_positions.getName()<<".\n STOPPING."<< endlog();
+          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_torques.getName()<<".\n STOPPING."<< endlog();
           this->stop();
         }
         else{
@@ -633,13 +633,13 @@ void kinova_gen3::torque_low_level_servoing()
       }
     }
     else{
-      log( Error ) << "Port control_joint_positions is not connected. The component has stopped. " << endlog();
+      log( Error ) << "Port control_joint_torques is not connected. The component has stopped. " << endlog();
       emergency_stop();
       this->stop();
     }
   }
   else {
-    log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 2 (JOINT_POS_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
+    log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 3 (JOINT_TORQUE_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
     this->stop();
   }
 }
