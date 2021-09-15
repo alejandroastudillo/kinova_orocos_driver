@@ -66,7 +66,7 @@ Logger::In in(this->getName().data());
 log( Info ) << "Kinova driver component has been created" << endlog();
 
 // this->addOperation("check_connection",  &kinova_gen3::check_connection, this, OwnThread).doc("Checks connection with robot");
-this->addOperation("set_servoing_mode",  &kinova_gen3::set_servoing_mode, this, OwnThread).doc("Sets the servoing mode to: 0 (HIGH_LEVEL), 1 (JOINT_VEL_LOW_LEVEL) or 2 (JOINT_POS_LOW_LEVEL)");
+this->addOperation("set_servoing_mode",  &kinova_gen3::set_servoing_mode, this, OwnThread).doc("Sets the servoing mode to: 0 (HIGH_LEVEL), 1 (JOINT_VEL_LOW_LEVEL), 2 (JOINT_POS_LOW_LEVEL) or 3 (JOINT_TORQUE_LOW_LEVEL)");
 this->addOperation("get_all_sensor_jsonstring",  &kinova_gen3::get_all_sensor_jsonstring, this, OwnThread).doc("Returns a JSON string with all sensor information");
 this->addOperation("reach_joint_angles",  &kinova_gen3::reach_joint_angles, this, OwnThread).doc("Moves the robot to a target position in jointspace (Kinova Controller). Must change to mode = 3 with set_servoing_mode operation");
 this->addOperation("reach_cartesian_pose",  &kinova_gen3::reach_cartesian_pose, this, OwnThread).doc("Moves the robot to a target pose (Kinova Controller). Must change to mode = 1 with set_servoing_mode operation");
@@ -78,6 +78,8 @@ this->addOperation("change_gripper_aperture_low_level",  &kinova_gen3::change_gr
 //Input ports (for control signals)
 this->addPort( "control_joint_positions", control_joint_positions ).doc( "Input port to pass the joint positions to control the robot [rad]. Will be ignored if the corresponding servoing mode is not configured" );
 this->addPort( "control_joint_velocities", control_joint_velocities ).doc( "Input port to pass the joint velocities to control the robot [rad/s]. Will be ignored if the corresponding servoing mode is not configured " );
+this->addPort( "control_joint_torques", control_joint_torques ).doc( "Input port to pass the joint torques to control the robot [Nm]. Will be ignored if the corresponding servoing mode is not configured " );
+
 
 //Output ports (for feedback)
 this->addPort( "sensor_joint_angles", sensor_joint_angles ).doc( "Output Port, to get the sensor joint angles [rad]" );
@@ -446,6 +448,22 @@ void kinova_gen3::set_servoing_mode(int mode) {
     }
     break;
 
+  case JOINT_TORQUE_LOW_LEVEL:
+  {
+      servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING);
+      pBase->SetServoingMode(servoingMode);
+      // Right now the velocity controller of kinova is not suitable to be used (when sending zero velocities the robot still moves slowly due to gravity. The virtual emergency stop also doesn't work in this mode)
+      // pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::VELOCITY);
+
+      // pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION);
+      // for(int i = 0; i < DOF; i++)
+      // {
+      //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
+      // }
+
+    }
+    break;
+
   default: // compilation error: jump to default: would enter the scope of 'x'
     // without initializing it
     {
@@ -454,7 +472,7 @@ void kinova_gen3::set_servoing_mode(int mode) {
     servoingMode.set_servoing_mode(k_api::Base::ServoingMode::SINGLE_LEVEL_SERVOING);
     pBase->SetServoingMode(servoingMode);
     log(Error) << "The value:  " << mode
-           << "   is not a valid number. For safety, the servoing mode has been set to 0 (HIGH_LEVEL). Remember: HIGH_LEVEL = 0, JOINT_VEL_LOW_LEVEL = 1, JOINT_POS_LOW_LEVEL = 2" << endlog();
+           << "   is not a valid number. For safety, the servoing mode has been set to 0 (HIGH_LEVEL). Remember: HIGH_LEVEL = 0, JOINT_VEL_LOW_LEVEL = 1, JOINT_POS_LOW_LEVEL = 2, JOINT_TORQUE_LOW_LEVEL = 3" << endlog();
     }
    break;
   }
@@ -588,6 +606,47 @@ void kinova_gen3::velocity_low_level_servoing()
   }
   else {
     log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 1 (JOINT_VEL_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
+    this->stop();
+  }
+
+}
+
+
+void kinova_gen3::torque_low_level_servoing()
+{
+  if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
+    if(control_joint_torques.connected()){
+      type_data = control_joint_torques.read(temporary_joint_setpoints);
+
+      if ( type_data != NoData ){
+        if (temporary_joint_setpoints.size()!=7){
+          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_torques.getName()<<".\n STOPPING."<< endlog();
+          this->stop();
+        }
+        else{
+          smoother_linear_interpolation(temporary_joint_setpoints); //Modifies the smoothed_setpoints
+          for(int i = 0; i < DOF; i++)
+          {
+            // BaseCommand.mutable_actuators(i)->set_position(BaseFeedback.actuators(i).position()); //This is used by Kinova to check the "following error" (search for it in the manual).
+            // BaseCommand.mutable_actuators(i)->set_velocity(smoothed_setpoints[i]*180/3.1415926);
+            integrated_position_setpoints[i] = integrated_position_setpoints[i] + smoothed_setpoints[i]*PERIOD;
+            BaseCommand.mutable_actuators(i)->set_position(fmod((integrated_position_setpoints[i]*180/3.1415926), 360.0f));
+          }
+          if(sent_setpoints.connected()){
+            sent_setpoints.write(smoothed_setpoints);
+          }
+          send_base_command(BaseCommand);
+        }
+      }
+    }
+    else{
+      log( Error ) << "Port control_joint_torques is not connected. The component has stopped. " << endlog();
+      emergency_stop();
+      this->stop();
+    }
+  }
+  else {
+    log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 3 (JOINT_TORQUE_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
     this->stop();
   }
 

@@ -1,0 +1,4 @@
+/include/kortex_api/include
+/include/kortex_api/lib
+.vscode/
+orocos.log
