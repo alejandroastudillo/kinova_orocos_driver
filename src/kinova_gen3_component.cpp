@@ -409,7 +409,7 @@ void kinova_gen3::set_servoing_mode(int mode) {
   auto servoingMode = k_api::Base::ServoingModeInformation();
   sending_setpoints = false;
   servoing_mode = mode;
-
+  
   switch (mode) {
 
   case HIGH_LEVEL:
@@ -433,7 +433,7 @@ void kinova_gen3::set_servoing_mode(int mode) {
     break;
 
   case JOINT_VEL_LOW_LEVEL:
-  {
+    {
       servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING	);
       pBase->SetServoingMode(servoingMode);
       // Right now the velocity controller of kinova is not suitable to be used (when sending zero velocities the robot still moves slowly due to gravity. The virtual emergency stop also doesn't work in this mode)
@@ -449,18 +449,14 @@ void kinova_gen3::set_servoing_mode(int mode) {
     break;
 
   case JOINT_TORQUE_LOW_LEVEL:
-  {
+      {
       servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING);
       pBase->SetServoingMode(servoingMode);
-      // Right now the velocity controller of kinova is not suitable to be used (when sending zero velocities the robot still moves slowly due to gravity. The virtual emergency stop also doesn't work in this mode)
-      // pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::VELOCITY);
-
       // pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION);
       // for(int i = 0; i < DOF; i++)
       // {
       //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
       // }
-
     }
     break;
 
@@ -615,22 +611,19 @@ void kinova_gen3::velocity_low_level_servoing()
 void kinova_gen3::torque_low_level_servoing()
 {
   if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
-    if(control_joint_torques.connected()){
-      type_data = control_joint_torques.read(temporary_joint_setpoints);
+    if(control_joint_positions.connected()){
+      type_data = control_joint_positions.read(temporary_joint_setpoints);
 
       if ( type_data != NoData ){
         if (temporary_joint_setpoints.size()!=7){
-          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_torques.getName()<<".\n STOPPING."<< endlog();
+          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_positions.getName()<<".\n STOPPING."<< endlog();
           this->stop();
         }
         else{
           smoother_linear_interpolation(temporary_joint_setpoints); //Modifies the smoothed_setpoints
           for(int i = 0; i < DOF; i++)
           {
-            // BaseCommand.mutable_actuators(i)->set_position(BaseFeedback.actuators(i).position()); //This is used by Kinova to check the "following error" (search for it in the manual).
-            // BaseCommand.mutable_actuators(i)->set_velocity(smoothed_setpoints[i]*180/3.1415926);
-            integrated_position_setpoints[i] = integrated_position_setpoints[i] + smoothed_setpoints[i]*PERIOD;
-            BaseCommand.mutable_actuators(i)->set_position(fmod((integrated_position_setpoints[i]*180/3.1415926), 360.0f));
+            BaseCommand.mutable_actuators(i)->set_position(fmod((smoothed_setpoints[i]*180/3.1415926), 360.0f));
           }
           if(sent_setpoints.connected()){
             sent_setpoints.write(smoothed_setpoints);
@@ -640,16 +633,15 @@ void kinova_gen3::torque_low_level_servoing()
       }
     }
     else{
-      log( Error ) << "Port control_joint_torques is not connected. The component has stopped. " << endlog();
+      log( Error ) << "Port control_joint_positions is not connected. The component has stopped. " << endlog();
       emergency_stop();
       this->stop();
     }
   }
   else {
-    log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 3 (JOINT_TORQUE_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
+    log( Error ) << "Use set_servoing_mode operation first to set the servoing_mode to 2 (JOINT_POS_LOW_LEVEL) servoing mode. The component has stopped" << endlog();
     this->stop();
   }
-
 }
 
 bool kinova_gen3::reach_joint_angles(std::vector<double> value)
@@ -780,7 +772,7 @@ void kinova_gen3::start_sending_setpoints()
     return;
   }
   try{
-    if(servoing_mode == JOINT_VEL_LOW_LEVEL || servoing_mode == JOINT_POS_LOW_LEVEL){
+    if(servoing_mode == JOINT_VEL_LOW_LEVEL || servoing_mode == JOINT_POS_LOW_LEVEL || servoing_mode == JOINT_TORQUE_LOW_LEVEL){
       BaseFeedback = pBaseCyclicRT->RefreshFeedback(); //TODO:Try to replace for RefreshCustomData in order to reduce the amount of data transferred.
       stream_sensor_info(BaseFeedback);
       initial_angles=get_joint_angles();
@@ -1217,6 +1209,9 @@ void kinova_gen3::updateHook() {
   }
   else if (servoing_mode == JOINT_VEL_LOW_LEVEL && check_connection() && sending_setpoints){
     velocity_low_level_servoing();
+  }
+  else if (servoing_mode == JOINT_TORQUE_LOW_LEVEL && check_connection() && sending_setpoints){
+    torque_low_level_servoing();
   }
   if (begin_counting) {
     std::this_thread::sleep_until(end_time_sleep); //TODO: Delete this line, since it might be not necesary
