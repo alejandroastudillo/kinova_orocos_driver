@@ -203,7 +203,7 @@ void kinova_gen3::stop_connection(){
       std::cout << "Stoping the connection with the robot!" << std::endl;
       set_servoing_mode(HIGH_LEVEL);
 
-      pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION); //Just in case in the future we change the control mode
+      pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION); //Just in case we have changed the control mode (to TORQUE, for instance)
       for(int i = 0; i < DOF; i++)
       {
         pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
@@ -452,11 +452,17 @@ void kinova_gen3::set_servoing_mode(int mode) {
       {
       servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING);
       pBase->SetServoingMode(servoingMode);
-      // pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION);
+    
+      pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::TORQUE);
       // for(int i = 0; i < DOF; i++)
       // {
       //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
       // }
+      
+      // JUST FOR INITIAL TEST -----------------------------------------------------------
+      int first_actuator_device_id = 1; // 1-based index
+      pActuatorConfig->SetControlMode(pControlModeMessage, first_actuator_device_id);
+      // ---------------------------------------------------------------------------------
     }
     break;
 
@@ -611,12 +617,12 @@ void kinova_gen3::velocity_low_level_servoing()
 void kinova_gen3::torque_low_level_servoing()
 {
   if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
-    if(control_joint_positions.connected()){
-      type_data = control_joint_positions.read(temporary_joint_setpoints);
+    if(control_joint_torques.connected()){
+      type_data = control_joint_torques.read(temporary_joint_setpoints);
 
       if ( type_data != NoData ){
-        if (temporary_joint_setpoints.size()!=7){
-          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_positions.getName()<<".\n STOPPING."<< endlog();
+        if (temporary_joint_setpoints.size() != DOF){
+          log(Error)<<this->getName()<<": error size of data in port "<<control_joint_torques.getName()<<".\n STOPPING."<< endlog();
           this->stop();
         }
         else{
@@ -1097,7 +1103,6 @@ bool kinova_gen3::startHook() {
 
     for(int i = 0; i < DOF; i++)
     {
-
       old_desired_pos[i] = initial_angles[i];
       BaseCommand.add_actuators()->set_position(BaseFeedback.actuators(i).position()); //BaseFeedback is updated in get_joint_angles() function
       if(servoing_mode == JOINT_POS_LOW_LEVEL){
