@@ -509,9 +509,10 @@ void kinova_gen3::set_servoing_mode(int mode) {
         //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
         // }
 
+        // TODO: Fix this for all joints ---------------------------------------------------
         // JUST FOR INITIAL TEST -----------------------------------------------------------
-        int first_actuator_device_id = 7; // 1-based index
-        pActuatorConfig->SetControlMode(pControlModeMessage, first_actuator_device_id);
+        int actuator_device_id = 7; // 1-based index
+        pActuatorConfig->SetControlMode(pControlModeMessage, actuator_device_id);
         log( Info ) << "Kinova Gen3 - Set control mode to TORQUE" << endlog();
         
         // ---------------------------------------------------------------------------------
@@ -878,11 +879,12 @@ void kinova_gen3::start_sending_setpoints()
       sending_setpoints = true;
     }
     else if(servoing_mode == JOINT_TORQUE_LOW_LEVEL){
+      // TODO: Check if this is needed --------------------------------------------
       BaseFeedback = pBaseCyclicRT->RefreshFeedback(); //TODO:Try to replace for RefreshCustomData in order to reduce the amount of data transferred.
       stream_sensor_info(BaseFeedback);
-      initial_angles = get_joint_angles();
-      initial_torques = get_joint_torques();
-
+      initial_angles=get_joint_angles();
+      initial_torques=get_joint_torques();
+      // ---------------------------------------------------------------------------
       sending_setpoints = true;
     }
     else{
@@ -1334,6 +1336,10 @@ void kinova_gen3::updateHook() {
     }
   }
   else{
+    // TODO: Check if this is needed --------------------------------------------
+    end_time_sleep = std::chrono::steady_clock::now() + period_nano;
+    std::this_thread::sleep_until(end_time_sleep);
+    // --------------------------------------------------------------------------
     begin_counting = true;
   }
    end_time_sleep = std::chrono::steady_clock::now() + period_nano;
