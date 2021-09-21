@@ -72,6 +72,7 @@ this->addOperation("reach_joint_angles",  &kinova_gen3::reach_joint_angles, this
 this->addOperation("reach_cartesian_pose",  &kinova_gen3::reach_cartesian_pose, this, OwnThread).doc("Moves the robot to a target pose (Kinova Controller). Must change to mode = 1 with set_servoing_mode operation");
 this->addOperation("change_gripper_aperture",  &kinova_gen3::change_gripper_aperture, this, OwnThread).doc("Change the appertur of the gripper: 1 is completely closed and 0 is completely opened");
 this->addOperation("get_joint_angles",  &kinova_gen3::get_joint_angles, this, OwnThread).doc("Get the current sensed joint angles [rad]. Useful to setup your trajectory planner.");
+this->addOperation("get_joint_torques",  &kinova_gen3::get_joint_torques, this, OwnThread).doc("Get the current sensed joint torques [N m].");
 this->addOperation("start_sending_setpoints",  &kinova_gen3::start_sending_setpoints, this, OwnThread).doc("Starts sending the setpoints of the joints to the robot");
 this->addOperation("change_gripper_aperture_low_level",  &kinova_gen3::change_gripper_aperture_low_level, this, OwnThread).doc("Change the appertur of the gripper: 1 is completely closed and 0 is completely opened. Use it during low level");
 
@@ -107,6 +108,7 @@ temporary_gripper_data.resize(3,0.0);
 temporary_joint_setpoints.resize(DOF,0.0);
 integrated_position_setpoints.resize(DOF,0.0);
 initial_angles.resize(DOF,0.0);
+initial_torques.resize(DOF,0.0);
 desired_pos.resize(DOF,0.0);
 desired_vel.resize(DOF,0.0);
 desired_accel.resize(DOF,0.0);
@@ -200,27 +202,30 @@ void kinova_gen3::stop_connection(){
 
   if(isConnected) {
     try{
-      std::cout << "Stoping the connection with the robot!" << std::endl;
+      log( Info ) << "Stoping the connection with the robot!" << endlog();
       set_servoing_mode(HIGH_LEVEL);
-
+      log( Info ) << "Servoing mode set to HIGH_LEVEL" << endlog();
       pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::POSITION); //Just in case we have changed the control mode (to TORQUE, for instance)
       for(int i = 0; i < DOF; i++)
       {
         pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
       }
-
+      log( Info ) << "Control mode set to POSITION for all actuators" << endlog();
       pSessionMng->CloseSession();
+      log( Info ) << "Session closed " << endlog();
       // Destroy the API
       pTransport->disconnect();
+      log( Info ) << "Disconnected (API destroyed)" << endlog();
+
       delete pBase;
       delete pDeviceConfig;
       delete pSessionMng;
       delete pRouterClient;
       delete pTransport;
       delete pTransportRT;
+      delete pSessionMngRT;
       delete pRouterClientRT;
       delete pBaseCyclicRT;
-      delete pSessionMngRT;
       delete pActuatorConfig;
       isConnected = false;
     }
@@ -302,6 +307,21 @@ void kinova_gen3::stream_sensor_info(const k_api::BaseCyclic::Feedback &BaseFeed
     // std::fill(temporary_sensor_data.begin(), temporary_sensor_data.end(), 0.0); //Assigns zero values to the vector, just in case to prevent the posibility of observing old values. Can be deleted to improve a bit the speed.
 
   }
+  // if ( sensor_joint_torques.connected() ){
+  //   for (unsigned int i = 0; i < DOF; i++) {
+  //           temporary_sensor_data[i] =  BaseFeedback_msg.actuators(i).torque();
+  //       }
+  //   sensor_joint_torques.write(temporary_sensor_data);
+  // }
+  for (unsigned int i = 0; i < DOF; i++) {
+    temporary_sensor_data[i] =  BaseFeedback_msg.actuators(i).torque();
+  }
+  if ( sensor_joint_torques.connected() ){
+    sensor_joint_torques.write(temporary_sensor_data);
+  }
+  if (!check_joint_torque_limits(temporary_sensor_data)){
+    emergency_stop();
+  }
 
   if ( tool_pose.connected() ){
     temporary_tool_data[0] =  BaseFeedback_msg.base().tool_pose_x();
@@ -367,15 +387,8 @@ void kinova_gen3::stream_sensor_info(const k_api::BaseCyclic::Feedback &BaseFeed
   // google::protobuf::util::MessageToJsonString(BaseFeedback_msg.interconnect(), &serializedData);
   // std::cout << serializedData << std::endl;
   }
-  for (unsigned int i = 0; i < DOF; i++) {
-    temporary_sensor_data[i] =  BaseFeedback_msg.actuators(i).torque();
-  }
-  if ( sensor_joint_torques.connected() ){
-    sensor_joint_torques.write(temporary_sensor_data);
-  }
-  if (!check_joint_torque_limits(temporary_sensor_data)){
-    emergency_stop();
-  }
+
+
 }
 
 
@@ -398,6 +411,15 @@ std::vector<double> kinova_gen3::get_joint_angles(){
         convert_angle_urdf_convention(temporary_sensor_data[i]);
       }
 
+  }
+
+  return temporary_sensor_data;
+}
+
+std::vector<double> kinova_gen3::get_joint_torques(){
+  BaseFeedback = pBaseCyclicRT->RefreshFeedback();
+  for (unsigned int i = 0; i < DOF; i++) {
+      temporary_sensor_data[i] =  BaseFeedback.actuators(i).torque();
   }
 
   return temporary_sensor_data;
@@ -450,19 +472,49 @@ void kinova_gen3::set_servoing_mode(int mode) {
 
   case JOINT_TORQUE_LOW_LEVEL:
       {
-      servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING);
-      pBase->SetServoingMode(servoingMode);
-    
-      pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::TORQUE);
-      // for(int i = 0; i < DOF; i++)
-      // {
-      //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
-      // }
-      
-      // JUST FOR INITIAL TEST -----------------------------------------------------------
-      int first_actuator_device_id = 1; // 1-based index
-      pActuatorConfig->SetControlMode(pControlModeMessage, first_actuator_device_id);
-      // ---------------------------------------------------------------------------------
+        // // Clearing faults
+        // try
+        // {
+        //     pBase->ClearFaults();
+        // }
+        // catch(...)
+        // {
+        //     log( Error ) << "Unable to clear robot faults" << endlog();
+        // }
+        // log( Info ) << "Kinova Gen3 - Faults cleared" << endlog();
+        
+        servoingMode.set_servoing_mode(k_api::Base::ServoingMode::LOW_LEVEL_SERVOING);
+        pBase->SetServoingMode(servoingMode);      
+        log( Info ) << "Kinova Gen3 - Servoing mode set" << endlog();
+        
+        BaseFeedback = pBaseCyclicRT->RefreshFeedback();
+        log( Info ) << "Kinova Gen3 - Feedback refreshed" << endlog();
+        
+        // Initialize each actuator to their current position
+        for (unsigned int i = 0; i < DOF; i++)
+        {
+            // Save the current actuator position, to avoid a following error
+            BaseCommand.add_actuators()->set_position(BaseFeedback.actuators(i).position());
+        }
+        // Send a first frame
+        BaseFeedback = pBaseCyclicRT->Refresh(BaseCommand);
+        log( Info ) << "Kinova Gen3 - Feedback refreshed" << endlog();
+        
+        // pControlModeMessage = k_api::ActuatorConfig::ControlModeInformation();
+        pControlModeMessage.set_control_mode(k_api::ActuatorConfig::ControlMode::TORQUE);
+        log( Info ) << "Kinova Gen3 - Set control mode message to TORQUE" << endlog();
+        
+        // for(int i = 0; i < DOF; i++)
+        // {
+        //   pActuatorConfig->SetControlMode(pControlModeMessage, i+1); //The index of the actuator apparently is not zero-based
+        // }
+
+        // JUST FOR INITIAL TEST -----------------------------------------------------------
+        int first_actuator_device_id = 7; // 1-based index
+        pActuatorConfig->SetControlMode(pControlModeMessage, first_actuator_device_id);
+        log( Info ) << "Kinova Gen3 - Set control mode to TORQUE" << endlog();
+        
+        // ---------------------------------------------------------------------------------
     }
     break;
 
@@ -484,10 +536,11 @@ void kinova_gen3::send_base_command(k_api::BaseCyclic::Command &BaseCommand_msg)
 {
   try
   {
-    //Uncomment to debug (very useful)
+    // //Uncomment to debug (very useful)
     // std::string serializedData;
-    // google::protobuf::util::MessageToJsonString(BaseCommand, &serializedData);
-    // std::cout << serializedData << std::endl;
+    // google::protobuf::util::MessageToJsonString(BaseCommand_msg, &serializedData);
+    // std::cout << serializedData << std::endl << std::endl;
+
     BaseCommand_msg.set_frame_id(BaseCommand_msg.frame_id() + 1);
     if (BaseCommand_msg.frame_id() > 65535){
       BaseCommand_msg.set_frame_id(0);
@@ -497,7 +550,16 @@ void kinova_gen3::send_base_command(k_api::BaseCyclic::Command &BaseCommand_msg)
       BaseCommand_msg.mutable_actuators(i)->set_command_id(BaseCommand_msg.frame_id());
     }
     update_gripper(target_aperture);
-    pBaseCyclicRT->Refresh_callback(BaseCommand_msg, lambda_fct_callback);
+    
+    if(servoing_mode == JOINT_POS_LOW_LEVEL || servoing_mode == JOINT_VEL_LOW_LEVEL) {
+      pBaseCyclicRT->Refresh_callback(BaseCommand_msg, lambda_fct_callback);
+    }
+    else if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
+      BaseFeedback = pBaseCyclicRT->Refresh(BaseCommand_msg, 0);
+      // pBaseCyclicRT->Refresh_callback(BaseCommand_msg, lambda_fct_callback, 0);
+
+      stream_sensor_info(BaseFeedback);
+    }
 
     if(type_data == NewData){
       if (!check_joint_kinematic_limits()){
@@ -618,23 +680,40 @@ void kinova_gen3::torque_low_level_servoing()
 {
   if(servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
     if(control_joint_torques.connected()){
-      type_data = control_joint_torques.read(temporary_joint_setpoints);
+      type_data = control_joint_torques.read(temporary_torques_setpoints);
 
       if ( type_data != NoData ){
-        if (temporary_joint_setpoints.size() != DOF){
+        if (temporary_torques_setpoints.size() != 7){
           log(Error)<<this->getName()<<": error size of data in port "<<control_joint_torques.getName()<<".\n STOPPING."<< endlog();
           this->stop();
         }
         else{
-          smoother_linear_interpolation(temporary_joint_setpoints); //Modifies the smoothed_setpoints
-          for(int i = 0; i < DOF; i++)
-          {
-            BaseCommand.mutable_actuators(i)->set_position(fmod((smoothed_setpoints[i]*180/3.1415926), 360.0f));
-          }
+          
+          // smoother_linear_interpolation(temporary_torques_setpoints); //Modifies the smoothed_setpoints
+          // for(int i = 0; i < DOF; i++)
+          // {
+          //   BaseCommand.mutable_actuators(i)->set_position(fmod((smoothed_setpoints[i]*180/3.1415926), 360.0f));
+          // }
+          // smoothed_setpoints[0] = 0;
+          // BaseCommand.mutable_actuators(DOF-1)->set_torque_joint(smoothed_setpoints[DOF-1]);
+
+          // BaseCommand.mutable_actuators(DOF-1)->set_position(BaseFeedback.actuators(DOF-1).position());
+          // BaseCommand.mutable_actuators(6)->set_torque_joint(temporary_torques_setpoints[6]);
+
+          // Position command to first actuator is set to measured one to avoid following error to trigger
+          // Bonus: When doing this instead of disabling the following error, if communication is lost and first
+          //        actuator continues to move under torque command, resulting position error with command will
+          //        trigger a following error and switch back the actuator in position command to hold its position
+          BaseCommand.mutable_actuators(6)->set_position(BaseFeedback.actuators(6).position());
+
+          // Actuator torque command is set
+          BaseCommand.mutable_actuators(6)->set_torque_joint(temporary_torques_setpoints[6]);
+
           if(sent_setpoints.connected()){
-            sent_setpoints.write(smoothed_setpoints);
+            sent_setpoints.write(temporary_torques_setpoints);
+            // sent_setpoints.write(smoothed_setpoints);
           }
-          send_base_command(BaseCommand);
+          send_base_command(BaseCommand); 
         }
       }
     }
@@ -773,12 +852,13 @@ bool kinova_gen3::change_gripper_aperture(double value)
 
 void kinova_gen3::start_sending_setpoints()
 {
+  log( Info ) << "Kinova Gen3 - start_sending_setpoints" << endlog();
   if (this->getPeriod() != 0){
     log( Error ) << "The driver needs to be non-periodic to operate. Please change the periodicity of the activity to 0 and run again." << this->getPeriod() << endlog();
     return;
   }
   try{
-    if(servoing_mode == JOINT_VEL_LOW_LEVEL || servoing_mode == JOINT_POS_LOW_LEVEL || servoing_mode == JOINT_TORQUE_LOW_LEVEL){
+    if(servoing_mode == JOINT_VEL_LOW_LEVEL || servoing_mode == JOINT_POS_LOW_LEVEL){
       BaseFeedback = pBaseCyclicRT->RefreshFeedback(); //TODO:Try to replace for RefreshCustomData in order to reduce the amount of data transferred.
       stream_sensor_info(BaseFeedback);
       initial_angles=get_joint_angles();
@@ -794,6 +874,14 @@ void kinova_gen3::start_sending_setpoints()
         }
       }
       // BaseFeedback = pBaseCyclicRT->Refresh(BaseCommand); //Aparently necesary for the robot to know where it is, I'm not sure why
+
+      sending_setpoints = true;
+    }
+    else if(servoing_mode == JOINT_TORQUE_LOW_LEVEL){
+      BaseFeedback = pBaseCyclicRT->RefreshFeedback(); //TODO:Try to replace for RefreshCustomData in order to reduce the amount of data transferred.
+      stream_sensor_info(BaseFeedback);
+      initial_angles = get_joint_angles();
+      initial_torques = get_joint_torques();
 
       sending_setpoints = true;
     }
@@ -902,7 +990,6 @@ void kinova_gen3::count_turns(const double &old_angle, const double &new_angle,i
 void  kinova_gen3::smoother_linear_interpolation(std::vector<double> &new_setpoints)
 {
   if(type_data == NewData){
-    // std::cout <<  virtual_time << std::endl;
     virtual_time = 0.0f;
 
     for (unsigned int i = 0; i < DOF; i++) {
@@ -1078,7 +1165,7 @@ bool kinova_gen3::configureHook(){
  * Return false to abort start up.
  */
 bool kinova_gen3::startHook() {
-
+  log( Info ) << "Kinova Gen3 - Executing startHook" << endlog();
   if(!isConnected){
     log( Error ) << "startHook: No connection can be stablished with the robot. The component cannot start its execution" << endlog();
     this->stop();
@@ -1099,27 +1186,45 @@ bool kinova_gen3::startHook() {
         log( Info ) << "The port sensor_joint_torques is not connected yet" << endlog();
       }
     }
-    initial_angles = get_joint_angles();
 
-    for(int i = 0; i < DOF; i++)
-    {
-      old_desired_pos[i] = initial_angles[i];
-      BaseCommand.add_actuators()->set_position(BaseFeedback.actuators(i).position()); //BaseFeedback is updated in get_joint_angles() function
-      if(servoing_mode == JOINT_POS_LOW_LEVEL){
-        previous_setpoints[i] = initial_angles[i];
+    if (servoing_mode == JOINT_POS_LOW_LEVEL || servoing_mode == JOINT_VEL_LOW_LEVEL) {
+      initial_angles = get_joint_angles();
+
+      for(int i = 0; i < DOF; i++)
+      {
+        old_desired_pos[i] = initial_angles[i];
+        BaseCommand.add_actuators()->set_position(BaseFeedback.actuators(i).position()); //BaseFeedback is updated in get_joint_angles() function
+        if(servoing_mode == JOINT_POS_LOW_LEVEL){
+          previous_setpoints[i] = initial_angles[i];
+        }
       }
-    }
-    gripper_initial_position = BaseFeedback.interconnect().gripper_feedback().motor()[0].position();
-    actual_velocity_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].velocity();
-    actual_current_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].current_motor();
-    target_aperture = gripper_initial_position;
-    actual_aperture = gripper_initial_position;
-    BaseCommand.mutable_interconnect()->mutable_command_id()->set_identifier(0);
+      gripper_initial_position = BaseFeedback.interconnect().gripper_feedback().motor()[0].position();
+      actual_velocity_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].velocity();
+      actual_current_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].current_motor();
+      target_aperture = gripper_initial_position;
+      actual_aperture = gripper_initial_position;
+      BaseCommand.mutable_interconnect()->mutable_command_id()->set_identifier(0);
 
-    GripperCommand = BaseCommand.mutable_interconnect()->mutable_gripper_command()->add_motor_cmd();
-    GripperCommand->set_position(gripper_initial_position );
-    GripperCommand->set_velocity(0.0);
-    GripperCommand->set_force(force_gripper);
+      GripperCommand = BaseCommand.mutable_interconnect()->mutable_gripper_command()->add_motor_cmd();
+      GripperCommand->set_position(gripper_initial_position );
+      GripperCommand->set_velocity(0.0);
+      GripperCommand->set_force(force_gripper);
+    }
+
+    if (servoing_mode == JOINT_TORQUE_LOW_LEVEL) {
+
+        gripper_initial_position = BaseFeedback.interconnect().gripper_feedback().motor()[0].position();
+        actual_velocity_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].velocity();
+        actual_current_gripper = BaseFeedback.interconnect().gripper_feedback().motor()[0].current_motor();
+        target_aperture = gripper_initial_position;
+        actual_aperture = gripper_initial_position;
+        BaseCommand.mutable_interconnect()->mutable_command_id()->set_identifier(0);
+
+        GripperCommand = BaseCommand.mutable_interconnect()->mutable_gripper_command()->add_motor_cmd();
+        GripperCommand->set_position(gripper_initial_position );
+        GripperCommand->set_velocity(0.0);
+        GripperCommand->set_force(force_gripper);
+    }
 
     auto fct_callback_noti = [&](k_api::Base::ActionNotification data)
     {
@@ -1160,11 +1265,13 @@ bool kinova_gen3::startHook() {
         if(action_event_index == 3){
           log( Warning ) << "Driver: High-level action paused" << endlog();
         }
+        
     };
     // Subscribe to ActionNotifications
     auto notifHandle = pBase->OnNotificationActionTopic(fct_callback_noti, k_api::Common::NotificationOptions());
 
-     return true;
+    return true;
+    
   }
 }
 
@@ -1216,8 +1323,9 @@ void kinova_gen3::updateHook() {
     velocity_low_level_servoing();
   }
   else if (servoing_mode == JOINT_TORQUE_LOW_LEVEL && check_connection() && sending_setpoints){
-    torque_low_level_servoing();
+    torque_low_level_servoing();  
   }
+
   if (begin_counting) {
     std::this_thread::sleep_until(end_time_sleep); //TODO: Delete this line, since it might be not necesary
     while ( std::chrono::steady_clock::now() < end_time_sleep || errno == EINTR ) { // In case the sleep was interrupted, continues to execute it
@@ -1228,19 +1336,19 @@ void kinova_gen3::updateHook() {
   else{
     begin_counting = true;
   }
-  end_time_sleep = std::chrono::steady_clock::now() + period_nano;
-
+   end_time_sleep = std::chrono::steady_clock::now() + period_nano;
   if (!this->trigger()){
     log( Error ) << "The activity cannot be triggered" << endlog();
   }
-
+  
 }
 
 /**
  * This function is called when the task is stopped.
  */
 void kinova_gen3::stopHook() {
-   set_servoing_mode(HIGH_LEVEL);
+    log( Warning ) <<  "Stop Hook is being executed!" << endlog();
+    set_servoing_mode(HIGH_LEVEL);
 }
 
 
@@ -1248,8 +1356,9 @@ void kinova_gen3::stopHook() {
  * This function is called when the update hook is on a break for some reason
  */
 bool kinova_gen3::breakUpdateHook() {
-   log( Error ) << "Entered to the breakUpdateHook" << endlog();
-   return false;
+   log( Warning ) << "Entered to the breakUpdateHook" << endlog();
+   // return true will allow the execution of stopHook
+   return true;
 }
 
 /**
@@ -1257,8 +1366,9 @@ bool kinova_gen3::breakUpdateHook() {
  */
 void kinova_gen3::cleanupHook() {
    // Your configuration cleanup code
+   log( Warning ) << "Entered to the cleanupHook" << endlog();
    kinova_gen3::stop_connection();
-   std::cout << "The API was destroyed successfully!" << std::endl;
+   log( Info ) << "The API was destroyed successfully!" << endlog();
 
 }
 

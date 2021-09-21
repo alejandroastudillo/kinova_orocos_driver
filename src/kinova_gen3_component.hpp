@@ -55,6 +55,7 @@ public:
 	bool reach_cartesian_pose(std::vector<double> value);
 	bool change_gripper_aperture(double value);
 	std::vector<double> get_joint_angles();
+	std::vector<double> get_joint_torques();
 	void start_sending_setpoints();
 	void send_base_command(k_api::BaseCyclic::Command &BaseCommand_msg);
 	void position_low_level_servoing();
@@ -155,8 +156,10 @@ private:
 
 	//temporary data for low-level servoing input setpoints
 	std::vector<double> temporary_joint_setpoints;
+	std::vector<double> temporary_torques_setpoints;
 	std::vector<double> integrated_position_setpoints;
 	std::vector<double> initial_angles;
+	std::vector<double> initial_torques;
 	float 				gripper_initial_position;
 	float 				target_aperture;
 	float 				actual_aperture;
