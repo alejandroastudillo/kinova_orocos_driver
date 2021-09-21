@@ -37,6 +37,7 @@ kin = depl:getPeer("kin")
 cp=rtt.Variable("ConnPolicy")
 depl:connect("kin.sensor_joint_angles","traj_gen.measured_angles",cp )
 depl:connect("kin.control_joint_velocities","traj_gen.desired_velocities",cp )
+depl:connect("kin.sensor_joint_velocities","traj_gen.measured_velocities",cp )
 
 --Call configureHook() functions of both components
 kin:configure()
@@ -46,7 +47,7 @@ traj_gen:configure()
 --Set the control mode to low level velocity servoing (1)
 kin:set_servoing_mode(1)
 
-motion_freq = 100
+motion_freq = 1000 -- 100
 --Set the activity of both components running at 1 Khz (same frequency as the kinova robot control loop)
 depl:setActivity("kin", 0, 99, rtt.globals.ORO_SCHED_RT)
 depl:setActivity("traj_gen", 1/motion_freq, 99, rtt.globals.ORO_SCHED_RT)

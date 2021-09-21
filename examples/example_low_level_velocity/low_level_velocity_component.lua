@@ -10,6 +10,9 @@ tc=rtt.getTC()
 measured_angles = rtt.InputPort("array", "measured_angles")
 tc:addPort(measured_angles)
 
+measured_velocities = rtt.InputPort("array", "measured_velocities")
+tc:addPort(measured_velocities)
+
 desired_velocities = rtt.OutputPort("array", "desired_velocities")
 tc:addPort(desired_velocities)
 
@@ -40,11 +43,15 @@ desired_velocities:write(joint_setpoints)
 time = time + tc:getPeriod()
 
     --Uncomment for printing the measured angles in the terminal:
-    --local fs,val= measured_angles:read()
+    -- local fs,val= measured_angles:read()
     -- myTable = val:totab()
     -- for k,v in pairs(myTable) do
     --   print("actuator  #" .. k .. "    value:  " .. round(v*180/math.pi,1) )
     -- end
+
+    local fs,val_vel= measured_velocities:read()
+    myTable_vel = val_vel:totab()
+    print("actuator  #7 des_vel: " .. round(angle,3) .. ",   act_vel:  " .. round(myTable_vel[7],3) )
 
 end
 
